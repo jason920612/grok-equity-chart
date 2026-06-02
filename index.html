@@ -1,0 +1,204 @@
+<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Equity</title>
+<script src="https://cdn.jsdelivr.net/npm/klinecharts@9.8.12/dist/umd/klinecharts.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<style>
+  html,body{margin:0;height:100%;background:#0b0e11;color:#cdd;font-family:system-ui,sans-serif}
+  #bar{padding:6px 12px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;border-bottom:1px solid #1a1f25}
+  #bar b{color:#fff;margin-right:4px}
+  .sep{width:1px;height:18px;background:#2a2f36;margin:0 4px}
+  .lbl{color:#6b7682;font-size:12px;margin-right:2px}
+  button{background:#1c2127;color:#cdd;border:1px solid #2a2f36;padding:3px 9px;border-radius:5px;cursor:pointer;font-size:13px}
+  button:hover{border-color:#3a4350;background:#232a31}
+  button.on{background:#2962ff;color:#fff;border-color:#2962ff}
+  #last{margin-left:auto;color:#9ad;font-variant-numeric:tabular-nums}
+  #wrap{position:absolute;top:84px;left:0;right:0;bottom:0}
+  @media(min-width:1100px){#wrap{top:42px}}
+  #chart{position:absolute;inset:0}
+  #cd{position:absolute;right:1px;display:none;z-index:5;pointer-events:none;background:#e0a020;color:#101418;
+      font-size:11px;font-weight:600;padding:1px 5px;border-radius:3px;white-space:nowrap;font-variant-numeric:tabular-nums}
+  #mkt{position:absolute;top:10px;left:50%;transform:translateX(-50%);display:none;z-index:6;background:#1c2127;
+      color:#e6c878;border:1px solid #3a4350;padding:5px 14px;border-radius:6px;font-size:13px;font-weight:600;
+      white-space:nowrap;pointer-events:none;box-shadow:0 2px 8px rgba(0,0,0,.4)}
+</style></head><body>
+<div id="bar">
+  <b>Equity 淨值</b>
+  <span class="lbl">週期</span><span id="tfs"></span>
+  <span class="sep"></span><span class="lbl">指標</span><span id="inds"></span>
+  <span class="sep"></span><span class="lbl">畫線</span><span id="draws"></span>
+  <button id="clr">清除畫線</button>
+  <span id="last"></span>
+</div>
+<div id="wrap"><div id="chart"></div><div id="cd"></div><div id="mkt"></div></div>
+<script>
+// ======== 🔧 貼上你的 Firebase 網頁設定 (Project settings → General → Web app) ========
+const firebaseConfig = {
+  apiKey: "AIzaSyAe_LOmLnE0nfzqhjNuibjDlh54ueSF4a4",
+  authDomain: "grok-equity.firebaseapp.com",
+  databaseURL: "https://grok-equity-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "grok-equity"
+};
+// =====================================================================================
+
+const TFS=["1s","5s","15s","1m","5m","15m","1h"];
+const TFSEC={"1s":1,"5s":5,"15s":15,"1m":60,"5m":300,"15m":900,"1h":3600};
+let tf="5s", lastClose=null, firstOpen=null;
+
+const DARK={
+  grid:{horizontal:{color:"#181c22"},vertical:{color:"#181c22"}},
+  candle:{bar:{upColor:"#26a69a",downColor:"#ef5350",upBorderColor:"#26a69a",downBorderColor:"#ef5350",
+    upWickColor:"#26a69a",downWickColor:"#ef5350"},
+    tooltip:{text:{color:"#cdd"},custom:(data)=>{
+      const cur=data.current||data, prev=data.prev||null;
+      const base=(prev&&prev.close!=null)?prev.close:cur.open;
+      const chg=cur.close-base, pct=base?chg/base*100:0;
+      const sg=chg>=0?"+":"", col=chg>=0?"#26a69a":"#ef5350";
+      return [{title:"time",value:new Date(cur.timestamp).toLocaleString()},
+        {title:"open",value:cur.open.toFixed(2)},{title:"high",value:cur.high.toFixed(2)},
+        {title:"low",value:cur.low.toFixed(2)},{title:"close",value:cur.close.toFixed(2)},
+        {title:"漲跌",value:{text:sg+chg.toFixed(2)+" ("+sg+pct.toFixed(2)+"%)",color:col}}];
+    }},
+    priceMark:{high:{color:"#cdd"},low:{color:"#cdd"},last:{text:{color:"#fff"}}}},
+  indicator:{tooltip:{text:{color:"#9ab"}}},
+  xAxis:{axisLine:{color:"#2a2f36"},tickLine:{color:"#2a2f36"},tickText:{color:"#8a93a0"}},
+  yAxis:{axisLine:{color:"#2a2f36"},tickLine:{color:"#2a2f36"},tickText:{color:"#8a93a0"}},
+  crosshair:{horizontal:{line:{color:"#5a6470"},text:{backgroundColor:"#2962ff"}},
+             vertical:{line:{color:"#5a6470"},text:{backgroundColor:"#2962ff"}}},
+  separator:{color:"#2a2f36"}};
+const chart=klinecharts.init("chart",{styles:DARK});
+
+// --- toolbar (same as the local page) ---
+function tfButtons(){const e=document.getElementById("tfs");e.innerHTML="";
+  TFS.forEach(t=>{const b=document.createElement("button");b.textContent=t;if(t===tf)b.className="on";
+    b.onclick=()=>{tf=t;tfButtons();render();};e.appendChild(b);});}
+const OVERLAY=["MA","EMA","BOLL"], PANE=["MACD","RSI","KDJ"]; const paneMap={};
+function indButtons(){const e=document.getElementById("inds");e.innerHTML="";
+  OVERLAY.concat(PANE).forEach(name=>{const b=document.createElement("button");b.textContent=name;
+    b.onclick=()=>{const on=b.classList.contains("on");
+      if(OVERLAY.includes(name)){if(on)chart.removeIndicator("candle_pane",name);
+        else chart.createIndicator(name,true,{id:"candle_pane"});}
+      else{if(on){chart.removeIndicator(paneMap[name],name);delete paneMap[name];}
+        else paneMap[name]=chart.createIndicator(name,false,{height:90});}
+      b.classList.toggle("on");};e.appendChild(b);});}
+const DRAWS=[["horizontalStraightLine","水平線"],["priceLine","價格線"],["segment","線段"],
+  ["rayLine","射線"],["priceChannelLine","通道"],["fibonacciLine","費波那契"],["simpleAnnotation","標註"]];
+function drawButtons(){const e=document.getElementById("draws");e.innerHTML="";
+  DRAWS.forEach(([name,zh])=>{const b=document.createElement("button");b.textContent=zh;
+    b.onclick=()=>chart.createOverlay(name);e.appendChild(b);});}
+document.getElementById("clr").onclick=()=>chart.removeOverlay();
+
+// --- data: 1s candles in a Map, aggregated to tf client-side ---
+const WINDOW=2*3600;
+const c1s=new Map();           // ts_s -> {o,h,l,c}  (history truth)
+let liveBar=null, dispClose=null, lastDrawn=null;
+function map1(b){return {timestamp:b.time*1000,open:b.open,high:b.high,low:b.low,close:b.close,volume:0};}
+function aggAll(){
+  const tfs=TFSEC[tf], ks=[...c1s.keys()].sort((a,b)=>a-b), out=new Map();
+  for(const ts of ks){const k=c1s.get(ts), b=Math.floor(ts/tfs)*tfs; const cell=out.get(b);
+    if(!cell)out.set(b,{time:b,open:k.o,high:k.h,low:k.l,close:k.c});
+    else{cell.high=Math.max(cell.high,k.h);cell.low=Math.min(cell.low,k.l);cell.close=k.c;}}
+  return [...out.values()];
+}
+function updateHeader(v){
+  const ref=(firstOpen!=null)?firstOpen:v, chg=v-ref, pct=ref?chg/ref*100:0;
+  const sg=chg>=0?"+":"", col=chg>=0?"#26a69a":"#ef5350";
+  document.getElementById("last").innerHTML="equity "+v.toFixed(2)+
+    " <span style='color:"+col+"'>"+sg+chg.toFixed(2)+" ("+sg+pct.toFixed(2)+"%)</span>"+
+    " <span style='color:#6b7682'>"+new Date().toLocaleTimeString()+"</span>";
+}
+function render(){
+  const bars=aggAll(); if(!bars.length){return;}
+  chart.applyNewData(bars.map(map1)); firstOpen=bars[0].open;
+  const lb=bars[bars.length-1];
+  liveBar={time:lb.time,open:lb.open,high:lb.high,low:lb.low,close:lb.close};
+  dispClose=lb.close; lastDrawn=lb.close; lastClose=lb.close; updateHeader(lb.close);
+}
+// completed 1s candle arrived (Firebase child_added)
+function onCandle(ts,k){
+  c1s.set(ts,{o:k.o,h:k.h,l:k.l,c:k.c});
+  for(const t0 of c1s.keys()) if(t0<ts-WINDOW) c1s.delete(t0);
+  if(liveBar){const tfs=TFSEC[tf]; if(Math.floor(ts/tfs)*tfs===liveBar.time){
+    liveBar.high=Math.max(liveBar.high,k.h); liveBar.low=Math.min(liveBar.low,k.l);}}
+}
+// live tick arrived (Firebase /equity/live) -> roll/extend the forming bar
+function onTick(t,v){
+  if(!mktOpen) return;
+  const tfs=TFSEC[tf], bucket=Math.floor(t/tfs)*tfs;
+  if(liveBar==null||bucket>liveBar.time){
+    if(liveBar)chart.updateData(map1(liveBar));
+    liveBar={time:bucket,open:v,high:v,low:v,close:v}; dispClose=v; lastDrawn=null;
+  }else if(bucket===liveBar.time){
+    liveBar.high=Math.max(liveBar.high,v); liveBar.low=Math.min(liveBar.low,v); liveBar.close=v;
+  }else return;
+  updateHeader(v);
+}
+// tween: exp-smooth dispClose toward target close (~150ms settle)
+const TAU=60; let _lastFrame=null;
+function animLoop(ts){
+  requestAnimationFrame(animLoop);
+  if(liveBar==null||dispClose==null){_lastFrame=ts;return;}
+  const dt=_lastFrame==null?16:(ts-_lastFrame); _lastFrame=ts;
+  dispClose+=(liveBar.close-dispClose)*(1-Math.exp(-dt/TAU));
+  if(Math.abs(liveBar.close-dispClose)<0.0005)dispClose=liveBar.close;
+  if(dispClose!==lastDrawn){
+    chart.updateData({timestamp:liveBar.time*1000,open:liveBar.open,high:liveBar.high,
+      low:liveBar.low,close:dispClose,volume:0});
+    lastDrawn=dispClose; lastClose=dispClose;
+  }
+}
+
+// --- FX market status (computed locally, mirrors settings.py) ---
+function fxClosed(d){
+  const mo=d.getUTCMonth()+1, day=d.getUTCDate();
+  if((mo===12&&day===25)||(mo===1&&day===1))return true;
+  const wd=d.getUTCDay(), h=d.getUTCHours();
+  if(wd===5&&h>=21)return true; if(wd===6)return true; if(wd===0&&h<22)return true;
+  return false;
+}
+function fxReason(d){const mo=d.getUTCMonth()+1,day=d.getUTCDate();
+  if(mo===12&&day===25)return"耶誕節休市"; if(mo===1&&day===1)return"元旦休市"; return"外匯休市";}
+function fxNextOpen(d){ // ms timestamp of next open, or null
+  let t=new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate(),d.getUTCHours()+1,0,0,0));
+  for(let i=0;i<24*9;i++){if(!fxClosed(t))return t.getTime(); t=new Date(t.getTime()+3600000);}
+  return null;
+}
+const cdEl=document.getElementById("cd"), mktEl=document.getElementById("mkt");
+let mktOpen=true;
+function fmt(s){s=Math.max(0,Math.floor(s));const m=Math.floor(s/60),ss=s%60;
+  return (m>0?m+"m ":"")+String(ss).padStart(m>0?2:1,"0")+"s";}
+function fmtDur(s){s=Math.max(0,Math.floor(s));const d=Math.floor(s/86400);s-=d*86400;
+  const h=Math.floor(s/3600);s-=h*3600;const m=Math.floor(s/60),ss=s%60;
+  if(d>0)return d+"d "+h+"h "+m+"m"; if(h>0)return h+"h "+m+"m"; return m+"m "+ss+"s";}
+setInterval(()=>{
+  const now=new Date(); mktOpen=!fxClosed(now);
+  if(!mktOpen){
+    cdEl.style.display="none";
+    const no=fxNextOpen(now); let t="🔒 "+fxReason(now);
+    if(no)t+=" · "+fmtDur((no-now.getTime())/1000)+"後開市";
+    mktEl.textContent=t; mktEl.style.display="block"; return;
+  }
+  mktEl.style.display="none";
+  const tfs=TFSEC[tf],rem=tfs-((Date.now()/1000)%tfs); cdEl.textContent=fmt(rem);
+  if(lastClose==null){cdEl.style.display="none";return;}
+  const px=chart.convertToPixel({value:lastClose},{paneId:"candle_pane",absolute:true});
+  if(px&&isFinite(px.y)){cdEl.style.top=(px.y+13)+"px";cdEl.style.display="block";}
+  else cdEl.style.display="none";
+},250);
+
+// --- wire up ---
+tfButtons();indButtons();drawButtons();requestAnimationFrame(animLoop);
+window.addEventListener("resize",()=>chart.resize());
+try{
+  firebase.initializeApp(firebaseConfig);
+  const fdb=firebase.database();
+  fdb.ref("/equity/c1s").once("value").then(snap=>{
+    const val=snap.val()||{}; let maxTs=0;
+    for(const ts in val){const n=+ts; c1s.set(n,val[ts]); if(n>maxTs)maxTs=n;}
+    render();
+    fdb.ref("/equity/c1s").orderByKey().startAt(String(maxTs+1)).on("child_added",s=>onCandle(+s.key,s.val()));
+    fdb.ref("/equity/live").on("value",s=>{const m=s.val(); if(m)onTick(m.t,m.v);});
+  }).catch(e=>{document.getElementById("last").textContent="Firebase 讀取失敗: "+e.message;});
+}catch(e){document.getElementById("last").textContent="Firebase 設定錯誤: "+e.message;}
+</script></body></html>
