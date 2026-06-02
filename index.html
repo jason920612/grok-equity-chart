@@ -6,7 +6,8 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <style>
   html,body{margin:0;height:100%;background:#0b0e11;color:#cdd;font-family:system-ui,sans-serif}
-  #bar{padding:6px 12px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;border-bottom:1px solid #1a1f25}
+  body{display:flex;flex-direction:column;overflow:hidden}
+  #bar{flex:none;padding:6px 12px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;border-bottom:1px solid #1a1f25}
   #bar b{color:#fff;margin-right:4px}
   .sep{width:1px;height:18px;background:#2a2f36;margin:0 4px}
   .lbl{color:#6b7682;font-size:12px;margin-right:2px}
@@ -14,8 +15,7 @@
   button:hover{border-color:#3a4350;background:#232a31}
   button.on{background:#2962ff;color:#fff;border-color:#2962ff}
   #last{margin-left:auto;color:#9ad;font-variant-numeric:tabular-nums}
-  #wrap{position:absolute;top:84px;left:0;right:0;bottom:0}
-  @media(min-width:1100px){#wrap{top:42px}}
+  #wrap{flex:1 1 auto;position:relative;min-height:0}
   #chart{position:absolute;inset:0}
   #cd{position:absolute;right:1px;display:none;z-index:5;pointer-events:none;background:#e0a020;color:#101418;
       font-size:11px;font-weight:600;padding:1px 5px;border-radius:3px;white-space:nowrap;font-variant-numeric:tabular-nums}
@@ -50,7 +50,7 @@ const DARK={
   grid:{horizontal:{color:"#181c22"},vertical:{color:"#181c22"}},
   candle:{bar:{upColor:"#26a69a",downColor:"#ef5350",upBorderColor:"#26a69a",downBorderColor:"#ef5350",
     upWickColor:"#26a69a",downWickColor:"#ef5350"},
-    tooltip:{text:{color:"#cdd"},custom:(data)=>{
+    tooltip:{showRule:"follow_cross",text:{color:"#cdd"},custom:(data)=>{
       const cur=data.current||data, prev=data.prev||null;
       const base=(prev&&prev.close!=null)?prev.close:cur.open;
       const chg=cur.close-base, pct=base?chg/base*100:0;
