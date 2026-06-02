@@ -72,7 +72,9 @@ const chart=klinecharts.init("chart",{styles:DARK});
 // --- toolbar (same as the local page) ---
 function tfButtons(){const e=document.getElementById("tfs");e.innerHTML="";
   TFS.forEach(t=>{const b=document.createElement("button");b.textContent=t;if(t===tf)b.className="on";
-    b.onclick=()=>{tf=t;tfButtons();render();};e.appendChild(b);});}
+    b.onclick=()=>{const old=tf;tf=t;tfButtons();
+      if(seriesForTf(t)!==seriesForTf(old))attachSeries(seriesForTf(t)); else render();};
+    e.appendChild(b);});}
 const OVERLAY=["MA","EMA","BOLL"], PANE=["MACD","RSI","KDJ"]; const paneMap={};
 function indButtons(){const e=document.getElementById("inds");e.innerHTML="";
   OVERLAY.concat(PANE).forEach(name=>{const b=document.createElement("button");b.textContent=name;
@@ -89,17 +91,33 @@ function drawButtons(){const e=document.getElementById("draws");e.innerHTML="";
     b.onclick=()=>chart.createOverlay(name);e.appendChild(b);});}
 document.getElementById("clr").onclick=()=>chart.removeOverlay();
 
-// --- data: 1s candles in a Map, aggregated to tf client-side ---
-const WINDOW=2*3600;
-const c1s=new Map();           // ts_s -> {o,h,l,c}  (history truth)
+// --- data: a base series (1s/1m/1h) in a Map, aggregated to tf client-side ---
+// 1s/5s/15s -> c1s (2h) | 1m/5m/15m -> c1m (30d) | 1h -> c1h (120d)
+let base=new Map();            // ts_s -> {o,h,l,c}  (current series' candles)
 let liveBar=null, dispClose=null, lastDrawn=null;
+let fdb=null, curSeries=null, seriesQuery=null, seriesCb=null;
+function seriesForTf(t){const s=TFSEC[t]; return s<60?"c1s":(s<3600?"c1m":"c1h");}
 function map1(b){return {timestamp:b.time*1000,open:b.open,high:b.high,low:b.low,close:b.close,volume:0};}
 function aggAll(){
-  const tfs=TFSEC[tf], ks=[...c1s.keys()].sort((a,b)=>a-b), out=new Map();
-  for(const ts of ks){const k=c1s.get(ts), b=Math.floor(ts/tfs)*tfs; const cell=out.get(b);
+  const tfs=TFSEC[tf], ks=[...base.keys()].sort((a,b)=>a-b), out=new Map();
+  for(const ts of ks){const k=base.get(ts), b=Math.floor(ts/tfs)*tfs; const cell=out.get(b);
     if(!cell)out.set(b,{time:b,open:k.o,high:k.h,low:k.l,close:k.c});
     else{cell.high=Math.max(cell.high,k.h);cell.low=Math.min(cell.low,k.l);cell.close=k.c;}}
   return [...out.values()];
+}
+// (re)load the base series for the current tf and listen for new candles
+function attachSeries(s){
+  if(seriesQuery&&seriesCb){seriesQuery.off("child_added",seriesCb);seriesQuery=seriesCb=null;}
+  curSeries=s; base=new Map();
+  const ref=fdb.ref("/equity/"+s);
+  ref.once("value").then(snap=>{
+    if(curSeries!==s)return;  // a newer switch superseded this load
+    const val=snap.val()||{}; let maxTs=0;
+    for(const ts in val){const n=+ts; base.set(n,val[ts]); if(n>maxTs)maxTs=n;}
+    render();
+    seriesQuery=ref.orderByKey().startAt(String(maxTs+1));
+    seriesCb=seriesQuery.on("child_added",sn=>onCandle(+sn.key,sn.val()));
+  }).catch(e=>{document.getElementById("last").textContent="讀取失敗: "+e.message;});
 }
 function updateHeader(v){
   const ref=(firstOpen!=null)?firstOpen:v, chg=v-ref, pct=ref?chg/ref*100:0;
@@ -115,10 +133,9 @@ function render(){
   liveBar={time:lb.time,open:lb.open,high:lb.high,low:lb.low,close:lb.close};
   dispClose=lb.close; lastDrawn=lb.close; lastClose=lb.close; updateHeader(lb.close);
 }
-// completed 1s candle arrived (Firebase child_added)
+// a completed base candle arrived (Firebase child_added)
 function onCandle(ts,k){
-  c1s.set(ts,{o:k.o,h:k.h,l:k.l,c:k.c});
-  for(const t0 of c1s.keys()) if(t0<ts-WINDOW) c1s.delete(t0);
+  base.set(ts,{o:k.o,h:k.h,l:k.l,c:k.c});
   if(liveBar){const tfs=TFSEC[tf]; if(Math.floor(ts/tfs)*tfs===liveBar.time){
     liveBar.high=Math.max(liveBar.high,k.h); liveBar.low=Math.min(liveBar.low,k.l);}}
 }
@@ -192,13 +209,8 @@ tfButtons();indButtons();drawButtons();requestAnimationFrame(animLoop);
 window.addEventListener("resize",()=>chart.resize());
 try{
   firebase.initializeApp(firebaseConfig);
-  const fdb=firebase.database();
-  fdb.ref("/equity/c1s").once("value").then(snap=>{
-    const val=snap.val()||{}; let maxTs=0;
-    for(const ts in val){const n=+ts; c1s.set(n,val[ts]); if(n>maxTs)maxTs=n;}
-    render();
-    fdb.ref("/equity/c1s").orderByKey().startAt(String(maxTs+1)).on("child_added",s=>onCandle(+s.key,s.val()));
-    fdb.ref("/equity/live").on("value",s=>{const m=s.val(); if(m)onTick(m.t,m.v);});
-  }).catch(e=>{document.getElementById("last").textContent="Firebase 讀取失敗: "+e.message;});
+  fdb=firebase.database();
+  attachSeries(seriesForTf(tf));
+  fdb.ref("/equity/live").on("value",s=>{const m=s.val(); if(m)onTick(m.t,m.v);});
 }catch(e){document.getElementById("last").textContent="Firebase 設定錯誤: "+e.message;}
 </script></body></html>
