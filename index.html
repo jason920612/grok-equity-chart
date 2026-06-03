@@ -230,6 +230,37 @@ setInterval(()=>{
 // --- wire up ---
 tfButtons();indButtons();drawButtons();requestAnimationFrame(animLoop);
 window.addEventListener("resize",()=>chart.resize());
+
+// While the page is backgrounded the live loop pauses, so buckets that complete
+// while away never get drawn (updateData can't backfill the middle). On resume,
+// re-pull the series and redraw — preserving the user's zoom + scroll position.
+function withViewport(reload){
+  let bs=null, atEdge=true, rightTs=null;
+  try{
+    const dl=chart.getDataList(), vr=chart.getVisibleRange(), b=chart.getBarSpace();
+    bs=(typeof b==="number")?b:(b&&b.bar);
+    if(dl&&dl.length&&vr){ atEdge=vr.to>=dl.length-1;
+      const i=Math.min(vr.to,dl.length)-1; if(dl[i])rightTs=dl[i].timestamp; }
+  }catch(e){}
+  Promise.resolve(reload()).then(()=>{try{
+    if(bs)chart.setBarSpace(bs);
+    if(!atEdge&&rightTs!=null)chart.scrollToTimestamp(rightTs,0);  // keep scrolled-back view
+  }catch(e){}});
+}
+function resync(){
+  if(!fdb||!curSeries)return;
+  withViewport(()=>fdb.ref("/equity/"+curSeries).once("value").then(snap=>{
+    const val=snap.val()||{}; base=new Map();
+    for(const ts in val)base.set(+ts,val[ts]);
+    render();
+  }));
+}
+let _hiddenAt=0;
+document.addEventListener("visibilitychange",()=>{
+  if(document.visibilityState==="hidden")_hiddenAt=Date.now();
+  else if(Date.now()-_hiddenAt>1500)resync();  // only after a real background gap
+});
+
 try{
   firebase.initializeApp(firebaseConfig);
   fdb=firebase.database();
