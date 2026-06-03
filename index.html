@@ -11,8 +11,12 @@
   #mkt{position:absolute;top:52px;left:50%;transform:translateX(-50%);display:none;z-index:8;
        background:#1c2127;color:#e6c878;border:1px solid #3a4350;padding:5px 14px;border-radius:6px;
        font-size:13px;font-weight:600;white-space:nowrap;pointer-events:none;box-shadow:0 2px 8px rgba(0,0,0,.4)}
+  #stats{position:absolute;top:52px;right:10px;z-index:8;display:none;background:rgba(28,33,39,.85);
+       color:#cdd;padding:4px 10px;border-radius:6px;font-size:13px;white-space:nowrap;
+       pointer-events:none;font-variant-numeric:tabular-nums}
+  .tv-topbar{padding-left:16px!important}  /* stopgap: first interval button clipped at left edge */
 </style></head><body>
-<div id="app"></div><div id="err"></div><div id="mkt"></div>
+<div id="app"></div><div id="err"></div><div id="mkt"></div><div id="stats"></div>
 <script>
 // ======== Firebase web config (public-safe; access gated by RTDB rules) ========
 const firebaseConfig={
@@ -121,5 +125,18 @@ try{
     if(document.visibilityState==="hidden")_hid=Date.now();
     else if(Date.now()-_hid>1500&&chartRef.current){provider.invalidate&&provider.invalidate();chartRef.current.reloadHistory();}
   });
+  // current equity + 24h change readout (top-right)
+  const statsEl=document.getElementById("stats");
+  let _eq=null,_ref24=null;
+  function renderStats(){if(_eq==null){statsEl.style.display="none";return;}
+    let h="淨值 "+_eq.toFixed(2);
+    if(_ref24!=null){const chg=_eq-_ref24,up=chg>=0,col=up?"#26a69a":"#ef5350",sg=up?"+":"";
+      h+=" · <span style='color:"+col+"'>24h "+sg+chg.toFixed(2)+" ("+sg+(chg/_ref24*100).toFixed(2)+"%)</span>";}
+    statsEl.innerHTML=h; statsEl.style.display="block";}
+  fdb.ref("/equity/live").on("value",s=>{const m=s.val(); if(m){_eq=m.v; renderStats();}});
+  function loadRef24(){const cut=Math.floor(Date.now()/1000-86400);
+    fdb.ref("/equity/c1h").orderByKey().endAt(String(cut)).limitToLast(1).once("value")
+      .then(s=>{const v=s.val(); if(v){const k=Object.keys(v)[0]; _ref24=v[k].c; renderStats();}}).catch(e=>{});}
+  loadRef24(); setInterval(loadRef24,300000);
 }catch(e){document.getElementById("err").textContent="init error: "+(e&&e.message||e);}
 </script></body></html>
