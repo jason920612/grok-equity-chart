@@ -1,274 +1,117 @@
 <!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Equity</title>
-<script src="https://cdn.jsdelivr.net/npm/klinecharts@9.8.12/dist/umd/klinecharts.min.js"></script>
+<script src="https://github.com/CodeRyoStudio/tradview/releases/download/v1.0.0-rc.3/tradview.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <style>
   html,body{margin:0;height:100%;background:#0b0e11;color:#cdd;font-family:system-ui,sans-serif}
-  body{display:flex;flex-direction:column;overflow:hidden}
-  #bar{flex:none;padding:6px 12px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;border-bottom:1px solid #1a1f25}
-  #bar b{color:#fff;margin-right:4px}
-  .sep{width:1px;height:18px;background:#2a2f36;margin:0 4px}
-  .lbl{color:#6b7682;font-size:12px;margin-right:2px}
-  button{background:#1c2127;color:#cdd;border:1px solid #2a2f36;padding:3px 9px;border-radius:5px;cursor:pointer;font-size:13px}
-  button:hover{border-color:#3a4350;background:#232a31}
-  button.on{background:#2962ff;color:#fff;border-color:#2962ff}
-  #last{margin-left:auto;color:#9ad;font-variant-numeric:tabular-nums}
-  #wrap{flex:1 1 auto;position:relative;min-height:0}
-  #chart{position:absolute;inset:0}
-  #cd{position:absolute;right:1px;display:none;z-index:5;pointer-events:none;background:#e0a020;color:#101418;
-      font-size:11px;font-weight:600;padding:1px 5px;border-radius:3px;white-space:nowrap;font-variant-numeric:tabular-nums}
-  #mkt{position:absolute;top:10px;left:50%;transform:translateX(-50%);display:none;z-index:6;background:#1c2127;
-      color:#e6c878;border:1px solid #3a4350;padding:5px 14px;border-radius:6px;font-size:13px;font-weight:600;
-      white-space:nowrap;pointer-events:none;box-shadow:0 2px 8px rgba(0,0,0,.4)}
+  #app{position:absolute;inset:0;display:flex;flex-direction:column;min-height:0}
+  #err{position:absolute;top:8px;left:8px;right:8px;z-index:9;color:#ef5350;font-size:13px}
+  #mkt{position:absolute;top:52px;left:50%;transform:translateX(-50%);display:none;z-index:8;
+       background:#1c2127;color:#e6c878;border:1px solid #3a4350;padding:5px 14px;border-radius:6px;
+       font-size:13px;font-weight:600;white-space:nowrap;pointer-events:none;box-shadow:0 2px 8px rgba(0,0,0,.4)}
 </style></head><body>
-<div id="bar">
-  <b>Equity 淨值</b>
-  <span class="lbl">週期</span><span id="tfs"></span>
-  <span class="sep"></span><span class="lbl">指標</span><span id="inds"></span>
-  <span class="sep"></span><span class="lbl">畫線</span><span id="draws"></span>
-  <button id="clr">清除畫線</button>
-  <span id="last"></span>
-</div>
-<div id="wrap"><div id="chart"></div><div id="cd"></div><div id="mkt"></div></div>
+<div id="app"></div><div id="err"></div><div id="mkt"></div>
 <script>
-// ======== 🔧 貼上你的 Firebase 網頁設定 (Project settings → General → Web app) ========
-const firebaseConfig = {
-  apiKey: "AIzaSyAe_LOmLnE0nfzqhjNuibjDlh54ueSF4a4",
-  authDomain: "grok-equity.firebaseapp.com",
-  databaseURL: "https://grok-equity-default-rtdb.asia-southeast1.firebasedatabase.app",
-  projectId: "grok-equity"
-};
-// =====================================================================================
+// ======== Firebase web config (public-safe; access gated by RTDB rules) ========
+const firebaseConfig={
+  apiKey:"AIzaSyAe_LOmLnE0nfzqhjNuibjDlh54ueSF4a4",
+  authDomain:"grok-equity.firebaseapp.com",
+  databaseURL:"https://grok-equity-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId:"grok-equity"};
+// ================================================================================
 
-const TFS=["1s","5s","15s","1m","5m","15m","30m","1h"];
-const TFSEC={"1s":1,"5s":5,"15s":15,"1m":60,"5m":300,"15m":900,"30m":1800,"1h":3600};
-let tf="5s", lastClose=null, firstOpen=null;
-
-const DARK={
-  grid:{horizontal:{color:"#181c22"},vertical:{color:"#181c22"}},
-  candle:{bar:{upColor:"#26a69a",downColor:"#ef5350",upBorderColor:"#26a69a",downBorderColor:"#ef5350",
-    upWickColor:"#26a69a",downWickColor:"#ef5350"},
-    tooltip:{showRule:"follow_cross",text:{color:"#cdd"},custom:(data)=>{
-      const cur=data.current||data, prev=data.prev||null;
-      const base=(prev&&prev.close!=null)?prev.close:cur.open;
-      const chg=cur.close-base, pct=base?chg/base*100:0;
-      const sg=chg>=0?"+":"", col=chg>=0?"#26a69a":"#ef5350";
-      return [{title:"time",value:new Date(cur.timestamp).toLocaleString()},
-        {title:"open",value:cur.open.toFixed(2)},{title:"high",value:cur.high.toFixed(2)},
-        {title:"low",value:cur.low.toFixed(2)},{title:"close",value:cur.close.toFixed(2)},
-        {title:"漲跌",value:{text:sg+chg.toFixed(2)+" ("+sg+pct.toFixed(2)+"%)",color:col}}];
-    }},
-    priceMark:{high:{color:"#cdd"},low:{color:"#cdd"},last:{text:{color:"#fff"}}}},
-  indicator:{tooltip:{text:{color:"#9ab"}}},
-  xAxis:{axisLine:{color:"#2a2f36"},tickLine:{color:"#2a2f36"},tickText:{color:"#8a93a0"}},
-  yAxis:{axisLine:{color:"#2a2f36"},tickLine:{color:"#2a2f36"},tickText:{color:"#8a93a0"}},
-  crosshair:{horizontal:{line:{color:"#5a6470"},text:{backgroundColor:"#2962ff"}},
-             vertical:{line:{color:"#5a6470"},text:{backgroundColor:"#2962ff"}}},
-  separator:{color:"#2a2f36"}};
-const chart=klinecharts.init("chart",{styles:DARK});
-
-// --- persistence: remember timeframe / indicators / drawings in the browser ---
-const LSK={tf:"eq_tf",ind:"eq_inds",ov:"eq_overlays"};
-function lsGet(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v);}catch(e){return d;}}
-function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}}
-if(TFS.includes(lsGet(LSK.tf)))tf=lsGet(LSK.tf);
-const activeInds=new Set(lsGet(LSK.ind,[])||[]);
-const ovReg={}; let _restored=false;
-function saveInds(){lsSet(LSK.ind,[...activeInds]);}
-function saveOvs(){lsSet(LSK.ov,Object.values(ovReg));}
-function ovCbs(){const rec=e=>{const o=e&&(e.overlay||e);if(o&&o.id){ovReg[o.id]={name:o.name,points:o.points};saveOvs();}return false;};
-  return {onDrawEnd:rec,onPressedMoveEnd:rec,
-    onRemoved:e=>{const o=e&&(e.overlay||e);if(o&&o.id){delete ovReg[o.id];saveOvs();}return false;}};}
-function restoreSaved(){
-  if(_restored)return; _restored=true;
-  activeInds.forEach(name=>{if(OVERLAY.includes(name))chart.createIndicator(name,true,{id:"candle_pane"});
-    else paneMap[name]=chart.createIndicator(name,false,{height:90});});
-  (lsGet(LSK.ov,[])||[]).forEach(o=>{const id=chart.createOverlay({name:o.name,points:o.points,...ovCbs()});
-    if(id)ovReg[id]={name:o.name,points:o.points};});
-}
-
-// --- toolbar (same as the local page) ---
-function tfButtons(){const e=document.getElementById("tfs");e.innerHTML="";
-  TFS.forEach(t=>{const b=document.createElement("button");b.textContent=t;if(t===tf)b.className="on";
-    b.onclick=()=>{const old=tf;tf=t;lsSet(LSK.tf,t);tfButtons();
-      if(seriesForTf(t)!==seriesForTf(old))attachSeries(seriesForTf(t)); else render();};
-    e.appendChild(b);});}
-const OVERLAY=["MA","EMA","BOLL"], PANE=["MACD","RSI","KDJ"]; const paneMap={};
-function indButtons(){const e=document.getElementById("inds");e.innerHTML="";
-  OVERLAY.concat(PANE).forEach(name=>{const b=document.createElement("button");b.textContent=name;
-    if(activeInds.has(name))b.className="on";
-    b.onclick=()=>{const on=b.classList.contains("on");
-      if(OVERLAY.includes(name)){if(on)chart.removeIndicator("candle_pane",name);
-        else chart.createIndicator(name,true,{id:"candle_pane"});}
-      else{if(on){chart.removeIndicator(paneMap[name],name);delete paneMap[name];}
-        else paneMap[name]=chart.createIndicator(name,false,{height:90});}
-      b.classList.toggle("on");
-      if(on)activeInds.delete(name); else activeInds.add(name); saveInds();};e.appendChild(b);});}
-const DRAWS=[["horizontalStraightLine","水平線"],["priceLine","價格線"],["segment","線段"],
-  ["rayLine","射線"],["priceChannelLine","通道"],["fibonacciLine","費波那契"],["simpleAnnotation","標註"]];
-function drawButtons(){const e=document.getElementById("draws");e.innerHTML="";
-  DRAWS.forEach(([name,zh])=>{const b=document.createElement("button");b.textContent=zh;
-    b.onclick=()=>chart.createOverlay({name,...ovCbs()});e.appendChild(b);});}
-document.getElementById("clr").onclick=()=>{chart.removeOverlay();for(const k in ovReg)delete ovReg[k];saveOvs();};
-
-// --- data: a base series (1s/1m/1h) in a Map, aggregated to tf client-side ---
+const MS={"1s":1000,"5s":5000,"15s":15000,"1m":60000,"5m":300000,"15m":900000,"1h":3600000};
 // 1s/5s/15s -> c1s (2h) | 1m/5m/15m -> c1m (30d) | 1h -> c1h (120d)
-let base=new Map();            // ts_s -> {o,h,l,c}  (current series' candles)
-let liveBar=null, dispClose=null, lastDrawn=null;
-let fdb=null, curSeries=null, seriesQuery=null, seriesCb=null, _gen=0;
-function seriesForTf(t){const s=TFSEC[t]; return s<60?"c1s":(s<3600?"c1m":"c1h");}
-function map1(b){return {timestamp:b.time*1000,open:b.open,high:b.high,low:b.low,close:b.close,volume:0};}
-function aggAll(){
-  const tfs=TFSEC[tf], ks=[...base.keys()].sort((a,b)=>a-b), out=new Map();
-  for(const ts of ks){const k=base.get(ts), b=Math.floor(ts/tfs)*tfs; const cell=out.get(b);
-    if(!cell)out.set(b,{time:b,open:k.o,high:k.h,low:k.l,close:k.c});
-    else{cell.high=Math.max(cell.high,k.h);cell.low=Math.min(cell.low,k.l);cell.close=k.c;}}
-  return [...out.values()];
-}
-// (re)load the base series for the current tf and listen for new candles.
-// Don't clear `base` synchronously — keep showing the old series until the new
-// one actually loads (so rapid mobile toggles never hit an empty base, which
-// froze render). A generation token drops superseded loads / listeners.
-function attachSeries(s){
-  if(seriesQuery&&seriesCb){try{seriesQuery.off("child_added",seriesCb);}catch(e){}seriesQuery=seriesCb=null;}
-  curSeries=s; const gen=++_gen;
-  const ref=fdb.ref("/equity/"+s);
-  ref.once("value").then(snap=>{
-    if(gen!==_gen)return;  // a newer switch superseded this load
-    const val=snap.val()||{}; const nb=new Map(); let maxTs=0;
-    for(const ts in val){const n=+ts; nb.set(n,val[ts]); if(n>maxTs)maxTs=n;}
-    base=nb;  // swap in only once loaded
-    render();
-    seriesQuery=ref.orderByKey().startAt(String(maxTs+1));
-    seriesCb=seriesQuery.on("child_added",sn=>{ if(gen===_gen) onCandle(+sn.key,sn.val()); });
-  }).catch(e=>{document.getElementById("last").textContent="讀取失敗: "+e.message;});
-}
-function updateHeader(v){
-  const ref=(firstOpen!=null)?firstOpen:v, chg=v-ref, pct=ref?chg/ref*100:0;
-  const sg=chg>=0?"+":"", col=chg>=0?"#26a69a":"#ef5350";
-  document.getElementById("last").innerHTML="equity "+v.toFixed(2)+
-    " <span style='color:"+col+"'>"+sg+chg.toFixed(2)+" ("+sg+pct.toFixed(2)+"%)</span>"+
-    " <span style='color:#6b7682'>"+new Date().toLocaleTimeString()+"</span>";
-}
-function render(){
-  const bars=aggAll(); if(!bars.length){return;}
-  chart.applyNewData(bars.map(map1)); firstOpen=bars[0].open;
-  const lb=bars[bars.length-1];
-  liveBar={time:lb.time,open:lb.open,high:lb.high,low:lb.low,close:lb.close};
-  dispClose=lb.close; lastDrawn=lb.close; lastClose=lb.close; updateHeader(lb.close);
-  restoreSaved();  // re-apply saved indicators + drawings once data is in
-}
-// a completed base candle arrived (Firebase child_added)
-function onCandle(ts,k){
-  base.set(ts,{o:k.o,h:k.h,l:k.l,c:k.c});
-  if(liveBar){const tfs=TFSEC[tf]; if(Math.floor(ts/tfs)*tfs===liveBar.time){
-    liveBar.high=Math.max(liveBar.high,k.h); liveBar.low=Math.min(liveBar.low,k.l);}}
-}
-// live tick arrived (Firebase /equity/live) -> roll/extend the forming bar
-function onTick(t,v){
-  if(!mktOpen) return;
-  const tfs=TFSEC[tf], bucket=Math.floor(t/tfs)*tfs;
-  if(liveBar==null||bucket>liveBar.time){
-    if(liveBar)chart.updateData(map1(liveBar));
-    liveBar={time:bucket,open:v,high:v,low:v,close:v}; dispClose=v; lastDrawn=null;
-  }else if(bucket===liveBar.time){
-    liveBar.high=Math.max(liveBar.high,v); liveBar.low=Math.min(liveBar.low,v); liveBar.close=v;
-  }else return;
-  updateHeader(v);
-}
-// tween: exp-smooth dispClose toward target close (~150ms settle)
-const TAU=60; let _lastFrame=null;
-function animLoop(ts){
-  requestAnimationFrame(animLoop);
-  if(liveBar==null||dispClose==null){_lastFrame=ts;return;}
-  const dt=_lastFrame==null?16:(ts-_lastFrame); _lastFrame=ts;
-  dispClose+=(liveBar.close-dispClose)*(1-Math.exp(-dt/TAU));
-  if(Math.abs(liveBar.close-dispClose)<0.0005)dispClose=liveBar.close;
-  if(dispClose!==lastDrawn){
-    chart.updateData({timestamp:liveBar.time*1000,open:liveBar.open,high:liveBar.high,
-      low:liveBar.low,close:dispClose,volume:0});
-    lastDrawn=dispClose; lastClose=dispClose;
+function seriesOf(iv){return MS[iv]<60000?"c1s":(MS[iv]<3600000?"c1m":"c1h");}
+
+// TradView DataProvider backed by Firebase RTDB. getHistory aggregates the right
+// base series to the requested interval; subscribe drives the live bar off /equity/live.
+function firebaseProvider(fdb){
+  const cache={}, subs={}; let n=0;
+  function loadSeries(s){
+    if(cache[s])return Promise.resolve(cache[s]);
+    return fdb.ref("/equity/"+s).once("value").then(snap=>{
+      const val=snap.val()||{}, m=new Map(); let maxTs=0;
+      for(const ts in val){const k=+ts; m.set(k,val[ts]); if(k>maxTs)maxTs=k;}
+      cache[s]=m;
+      fdb.ref("/equity/"+s).orderByKey().startAt(String(maxTs+1)).on("child_added",sn=>m.set(+sn.key,sn.val()));
+      return m;
+    });
   }
+  function aggregate(series,ivMs){
+    const ks=[...series.keys()].sort((a,b)=>a-b), out=new Map();
+    for(const ts of ks){const k=series.get(ts), b=Math.floor(ts*1000/ivMs)*ivMs, cell=out.get(b);
+      if(!cell)out.set(b,{t:b,o:k.o,h:k.h,l:k.l,c:k.c});
+      else{cell.h=Math.max(cell.h,k.h);cell.l=Math.min(cell.l,k.l);cell.c=k.c;}}
+    return [...out.values()];
+  }
+  return {
+    getCapabilities(){return Promise.resolve({historyModes:["loadMore","range","cursor"],realtimeModes:["bar"]});},
+    getHistory(q){
+      const ivMs=MS[q.interval]; if(!ivMs)return Promise.resolve({bars:[],hasMore:false});
+      return loadSeries(seriesOf(q.interval)).then(series=>{
+        let bars=aggregate(series,ivMs);
+        if(q.mode==="loadMore"&&q.endTime)bars=bars.filter(b=>b.t<q.endTime);
+        else if(q.mode==="range")bars=bars.filter(b=>b.t>=q.from&&b.t<=q.to);
+        if(q.limit&&bars.length>q.limit)bars=bars.slice(bars.length-q.limit);
+        return {bars,hasMore:false};
+      });
+    },
+    subscribe(params,h){
+      const id="s"+(++n), ivMs=MS[params.interval]||1000; let cur=null;
+      const ref=fdb.ref("/equity/live");
+      const cb=ref.on("value",snap=>{const m=snap.val(); if(!m)return; const v=m.v,t=m.t*1000,b=Math.floor(t/ivMs)*ivMs;
+        if(!cur||b>cur.t){if(cur)h.onBar&&h.onBar(cur,{partial:false,subscriptionId:id});cur={t:b,o:v,h:v,l:v,c:v};}
+        else{cur.h=Math.max(cur.h,v);cur.l=Math.min(cur.l,v);cur.c=v;}
+        h.onBar&&h.onBar(cur,{partial:true,subscriptionId:id});});
+      subs[id]={ref,cb};
+      h.onConnectionChange&&h.onConnectionChange("connected");
+      return Promise.resolve({id,clientRef:id,symbol:params.symbol,interval:params.interval,
+        channels:["bar"],streamMode:"bar"});
+    },
+    unsubscribe(id){if(subs[id]){try{subs[id].ref.off("value",subs[id].cb);}catch(e){}delete subs[id];}return Promise.resolve();}
+  };
 }
 
-// --- FX market status (computed locally, mirrors settings.py) ---
-function fxClosed(d){
-  const mo=d.getUTCMonth()+1, day=d.getUTCDate();
+// --- FX market-closed banner (computed client-side, mirrors settings.py) ---
+function fxClosed(d){const mo=d.getUTCMonth()+1,day=d.getUTCDate();
   if((mo===12&&day===25)||(mo===1&&day===1))return true;
-  const wd=d.getUTCDay(), h=d.getUTCHours();
-  if(wd===5&&h>=21)return true; if(wd===6)return true; if(wd===0&&h<22)return true;
-  return false;
-}
+  const wd=d.getUTCDay(),h=d.getUTCHours();
+  if(wd===5&&h>=21)return true; if(wd===6)return true; if(wd===0&&h<22)return true; return false;}
 function fxReason(d){const mo=d.getUTCMonth()+1,day=d.getUTCDate();
   if(mo===12&&day===25)return"耶誕節休市"; if(mo===1&&day===1)return"元旦休市"; return"外匯休市";}
-function fxNextOpen(d){ // ms timestamp of next open, or null
-  let t=new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate(),d.getUTCHours()+1,0,0,0));
-  for(let i=0;i<24*9;i++){if(!fxClosed(t))return t.getTime(); t=new Date(t.getTime()+3600000);}
-  return null;
-}
-const cdEl=document.getElementById("cd"), mktEl=document.getElementById("mkt");
-let mktOpen=true;
-function fmt(s){s=Math.max(0,Math.floor(s));const m=Math.floor(s/60),ss=s%60;
-  return (m>0?m+"m ":"")+String(ss).padStart(m>0?2:1,"0")+"s";}
+function fxNextOpen(d){let t=new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate(),d.getUTCHours()+1,0,0,0));
+  for(let i=0;i<24*9;i++){if(!fxClosed(t))return t.getTime(); t=new Date(t.getTime()+3600000);} return null;}
 function fmtDur(s){s=Math.max(0,Math.floor(s));const d=Math.floor(s/86400);s-=d*86400;
   const h=Math.floor(s/3600);s-=h*3600;const m=Math.floor(s/60),ss=s%60;
-  if(d>0)return d+"d "+h+"h "+m+"m"; if(h>0)return h+"h "+m+"m"; return m+"m "+ss+"s";}
-setInterval(()=>{
-  const now=new Date(); mktOpen=!fxClosed(now);
-  if(!mktOpen){
-    cdEl.style.display="none";
-    const no=fxNextOpen(now); let t="🔒 "+fxReason(now);
-    if(no)t+=" · "+fmtDur((no-now.getTime())/1000)+"後開市";
-    mktEl.textContent=t; mktEl.style.display="block"; return;
-  }
-  mktEl.style.display="none";
-  const tfs=TFSEC[tf],rem=tfs-((Date.now()/1000)%tfs); cdEl.textContent=fmt(rem);
-  if(lastClose==null){cdEl.style.display="none";return;}
-  const px=chart.convertToPixel({value:lastClose},{paneId:"candle_pane",absolute:true});
-  if(px&&isFinite(px.y)){cdEl.style.top=(px.y+13)+"px";cdEl.style.display="block";}
-  else cdEl.style.display="none";
-},250);
-
-// --- wire up ---
-tfButtons();indButtons();drawButtons();requestAnimationFrame(animLoop);
-window.addEventListener("resize",()=>chart.resize());
-
-// While the page is backgrounded the live loop pauses, so buckets that complete
-// while away never get drawn (updateData can't backfill the middle). On resume,
-// re-pull the series and redraw — preserving the user's zoom + scroll position.
-function withViewport(reload){
-  let bs=null, atEdge=true, rightTs=null;
-  try{
-    const dl=chart.getDataList(), vr=chart.getVisibleRange(), b=chart.getBarSpace();
-    bs=(typeof b==="number")?b:(b&&b.bar);
-    if(dl&&dl.length&&vr){ atEdge=vr.to>=dl.length-1;
-      const i=Math.min(vr.to,dl.length)-1; if(dl[i])rightTs=dl[i].timestamp; }
-  }catch(e){}
-  Promise.resolve(reload()).then(()=>{try{
-    if(bs)chart.setBarSpace(bs);
-    if(!atEdge&&rightTs!=null)chart.scrollToTimestamp(rightTs,0);  // keep scrolled-back view
-  }catch(e){}});
-}
-function resync(){
-  if(!fdb||!curSeries)return;
-  withViewport(()=>fdb.ref("/equity/"+curSeries).once("value").then(snap=>{
-    const val=snap.val()||{}; base=new Map();
-    for(const ts in val)base.set(+ts,val[ts]);
-    render();
-  }));
-}
-let _hiddenAt=0;
-document.addEventListener("visibilitychange",()=>{
-  if(document.visibilityState==="hidden")_hiddenAt=Date.now();
-  else if(Date.now()-_hiddenAt>1500)resync();  // only after a real background gap
-});
+  return d>0?(d+"d "+h+"h "+m+"m"):(h>0?(h+"h "+m+"m"):(m+"m "+ss+"s"));}
+const mktEl=document.getElementById("mkt");
+setInterval(()=>{const now=new Date(); if(!fxClosed(now)){mktEl.style.display="none";return;}
+  const no=fxNextOpen(now); let t="🔒 "+fxReason(now);
+  if(no)t+=" · "+fmtDur((no-now.getTime())/1000)+"後開市";
+  mktEl.textContent=t; mktEl.style.display="block";},500);
 
 try{
   firebase.initializeApp(firebaseConfig);
-  fdb=firebase.database();
-  attachSeries(seriesForTf(tf));
-  fdb.ref("/equity/live").on("value",s=>{const m=s.val(); if(m)onTick(m.t,m.v);});
-}catch(e){document.getElementById("last").textContent="Firebase 設定錯誤: "+e.message;}
+  const fdb=firebase.database();
+  const provider=firebaseProvider(fdb);
+  const chartRef={current:null};
+  const layout=TradView.mountChartLayout(document.getElementById("app"),{
+    showTopBar:true,showLeftToolbar:true,showBottomToolbar:true,
+    showCrosshairLegend:true,showStatusBar:true,showContextMenu:true,
+    intervals:["1s","5s","15s","1m","5m","15m","1h"],
+    activeInterval:"5s",activeDrawingTool:"cursor",
+    onIntervalChange:(iv)=>chartRef.current&&chartRef.current.setInterval(iv),
+    onDrawingToolSelect:(tool)=>chartRef.current&&chartRef.current.setDrawingTool(tool),
+    onDrawingStyleChange:(patch)=>chartRef.current&&chartRef.current.updateSelectedDrawingStyle(patch)});
+  const chart=TradView.createChart(layout.chartHost,{
+    dataProvider:provider, interval:"5s", theme:"dark",
+    indicatorHost:layout.indicatorHost,
+    features:{drawings:{layer:true,persist:true},smoothPriceUpdate:true,smoothPriceDurationMs:150}});
+  chartRef.current=chart;
+  chart.setSymbol("EQUITY");
+  window.addEventListener("resize",()=>chart.resize());
+}catch(e){document.getElementById("err").textContent="init error: "+(e&&e.message||e);}
 </script></body></html>
