@@ -1,7 +1,7 @@
 <!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Equity</title>
-<script src="https://github.com/CodeRyoStudio/tradview/releases/download/v1.0.0-rc.3/tradview.min.js"></script>
+<script src="tradview.min.js"></script><!-- vendored v1.0.1, served gzip by GitHub Pages -->
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <style>
@@ -114,12 +114,12 @@ try{
   chartRef.current=chart;
   chart.setSymbol("EQUITY");
   window.addEventListener("resize",()=>chart.resize());
-  // After a real background gap, drop the stale Firebase cache + re-bootstrap so
-  // the candles recorded while the page was frozen fill back in.
+  // After a real background gap, drop the stale Firebase cache + reloadHistory()
+  // so missed candles fill back in while keeping the user's scroll/zoom.
   let _hid=0;
   document.addEventListener("visibilitychange",()=>{
     if(document.visibilityState==="hidden")_hid=Date.now();
-    else if(Date.now()-_hid>1500&&chartRef.current){provider.invalidate&&provider.invalidate();chartRef.current.setSymbol("EQUITY");}
+    else if(Date.now()-_hid>1500&&chartRef.current){provider.invalidate&&provider.invalidate();chartRef.current.reloadHistory();}
   });
 }catch(e){document.getElementById("err").textContent="init error: "+(e&&e.message||e);}
 </script></body></html>
