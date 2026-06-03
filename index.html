@@ -69,27 +69,49 @@ const DARK={
   separator:{color:"#2a2f36"}};
 const chart=klinecharts.init("chart",{styles:DARK});
 
+// --- persistence: remember timeframe / indicators / drawings in the browser ---
+const LSK={tf:"eq_tf",ind:"eq_inds",ov:"eq_overlays"};
+function lsGet(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v);}catch(e){return d;}}
+function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}}
+if(TFS.includes(lsGet(LSK.tf)))tf=lsGet(LSK.tf);
+const activeInds=new Set(lsGet(LSK.ind,[])||[]);
+const ovReg={}; let _restored=false;
+function saveInds(){lsSet(LSK.ind,[...activeInds]);}
+function saveOvs(){lsSet(LSK.ov,Object.values(ovReg));}
+function ovCbs(){const rec=e=>{const o=e&&(e.overlay||e);if(o&&o.id){ovReg[o.id]={name:o.name,points:o.points};saveOvs();}return false;};
+  return {onDrawEnd:rec,onPressedMoveEnd:rec,
+    onRemoved:e=>{const o=e&&(e.overlay||e);if(o&&o.id){delete ovReg[o.id];saveOvs();}return false;}};}
+function restoreSaved(){
+  if(_restored)return; _restored=true;
+  activeInds.forEach(name=>{if(OVERLAY.includes(name))chart.createIndicator(name,true,{id:"candle_pane"});
+    else paneMap[name]=chart.createIndicator(name,false,{height:90});});
+  (lsGet(LSK.ov,[])||[]).forEach(o=>{const id=chart.createOverlay({name:o.name,points:o.points,...ovCbs()});
+    if(id)ovReg[id]={name:o.name,points:o.points};});
+}
+
 // --- toolbar (same as the local page) ---
 function tfButtons(){const e=document.getElementById("tfs");e.innerHTML="";
   TFS.forEach(t=>{const b=document.createElement("button");b.textContent=t;if(t===tf)b.className="on";
-    b.onclick=()=>{const old=tf;tf=t;tfButtons();
+    b.onclick=()=>{const old=tf;tf=t;lsSet(LSK.tf,t);tfButtons();
       if(seriesForTf(t)!==seriesForTf(old))attachSeries(seriesForTf(t)); else render();};
     e.appendChild(b);});}
 const OVERLAY=["MA","EMA","BOLL"], PANE=["MACD","RSI","KDJ"]; const paneMap={};
 function indButtons(){const e=document.getElementById("inds");e.innerHTML="";
   OVERLAY.concat(PANE).forEach(name=>{const b=document.createElement("button");b.textContent=name;
+    if(activeInds.has(name))b.className="on";
     b.onclick=()=>{const on=b.classList.contains("on");
       if(OVERLAY.includes(name)){if(on)chart.removeIndicator("candle_pane",name);
         else chart.createIndicator(name,true,{id:"candle_pane"});}
       else{if(on){chart.removeIndicator(paneMap[name],name);delete paneMap[name];}
         else paneMap[name]=chart.createIndicator(name,false,{height:90});}
-      b.classList.toggle("on");};e.appendChild(b);});}
+      b.classList.toggle("on");
+      if(on)activeInds.delete(name); else activeInds.add(name); saveInds();};e.appendChild(b);});}
 const DRAWS=[["horizontalStraightLine","水平線"],["priceLine","價格線"],["segment","線段"],
   ["rayLine","射線"],["priceChannelLine","通道"],["fibonacciLine","費波那契"],["simpleAnnotation","標註"]];
 function drawButtons(){const e=document.getElementById("draws");e.innerHTML="";
   DRAWS.forEach(([name,zh])=>{const b=document.createElement("button");b.textContent=zh;
-    b.onclick=()=>chart.createOverlay(name);e.appendChild(b);});}
-document.getElementById("clr").onclick=()=>chart.removeOverlay();
+    b.onclick=()=>chart.createOverlay({name,...ovCbs()});e.appendChild(b);});}
+document.getElementById("clr").onclick=()=>{chart.removeOverlay();for(const k in ovReg)delete ovReg[k];saveOvs();};
 
 // --- data: a base series (1s/1m/1h) in a Map, aggregated to tf client-side ---
 // 1s/5s/15s -> c1s (2h) | 1m/5m/15m -> c1m (30d) | 1h -> c1h (120d)
@@ -132,6 +154,7 @@ function render(){
   const lb=bars[bars.length-1];
   liveBar={time:lb.time,open:lb.open,high:lb.high,low:lb.low,close:lb.close};
   dispClose=lb.close; lastDrawn=lb.close; lastClose=lb.close; updateHeader(lb.close);
+  restoreSaved();  // re-apply saved indicators + drawings once data is in
 }
 // a completed base candle arrived (Firebase child_added)
 function onCandle(ts,k){
