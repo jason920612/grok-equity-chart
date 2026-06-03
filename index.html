@@ -71,7 +71,8 @@ function firebaseProvider(fdb){
       return Promise.resolve({id,clientRef:id,symbol:params.symbol,interval:params.interval,
         channels:["bar"],streamMode:"bar"});
     },
-    unsubscribe(id){if(subs[id]){try{subs[id].ref.off("value",subs[id].cb);}catch(e){}delete subs[id];}return Promise.resolve();}
+    unsubscribe(id){if(subs[id]){try{subs[id].ref.off("value",subs[id].cb);}catch(e){}delete subs[id];}return Promise.resolve();},
+    invalidate(){for(const s in cache){try{fdb.ref("/equity/"+s).off();}catch(e){}delete cache[s];}}  // drop stale cache on resume
   };
 }
 
@@ -113,5 +114,12 @@ try{
   chartRef.current=chart;
   chart.setSymbol("EQUITY");
   window.addEventListener("resize",()=>chart.resize());
+  // After a real background gap, drop the stale Firebase cache + re-bootstrap so
+  // the candles recorded while the page was frozen fill back in.
+  let _hid=0;
+  document.addEventListener("visibilitychange",()=>{
+    if(document.visibilityState==="hidden")_hid=Date.now();
+    else if(Date.now()-_hid>1500&&chartRef.current){provider.invalidate&&provider.invalidate();chartRef.current.setSymbol("EQUITY");}
+  });
 }catch(e){document.getElementById("err").textContent="init error: "+(e&&e.message||e);}
 </script></body></html>
